@@ -6,6 +6,9 @@ import { useRouter, useSearchParams } from "next/navigation";
 type Source = { id: string; path: string };
 type RootFolder = { path: string; name: string };
 
+const fetchApi: typeof fetch =
+  typeof window !== "undefined" ? window.fetch.bind(window) : fetch;
+
 function normPath(p: string): string {
   const s = (p ?? "").trim();
   return s.startsWith("/") ? s : `/${s}`;
@@ -44,7 +47,7 @@ export default function SettingsClient({
     setFoldersLoading(true);
     setMessage(null);
     setConnectionInvalidated(false);
-    fetch("/api/dropbox/root-folders")
+    fetchApi("/api/dropbox/root-folders")
       .then((res) => {
         if (!res.ok) {
           return res.json().then((d) => {
@@ -81,7 +84,7 @@ export default function SettingsClient({
       if (isSelected(path)) {
         const id = getSourceId(path);
         if (!id) return;
-        const res = await fetch(`/api/dropbox/sources?id=${encodeURIComponent(id)}`, { method: "DELETE" });
+        const res = await fetchApi(`/api/dropbox/sources?id=${encodeURIComponent(id)}`, { method: "DELETE" });
         if (!res.ok) {
           const data = await res.json().catch(() => ({}));
           setMessage(data.error ?? "Error al quitar carpeta");
@@ -89,7 +92,7 @@ export default function SettingsClient({
         }
         setSources((prev) => prev.filter((s) => s.id !== id));
       } else {
-        const res = await fetch("/api/dropbox/sources", {
+        const res = await fetchApi("/api/dropbox/sources", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ path }),
@@ -114,7 +117,7 @@ export default function SettingsClient({
     setScanning(true);
     setMessage(null);
     try {
-      const res = await fetch("/api/dropbox/scan", { method: "POST" });
+      const res = await fetchApi("/api/dropbox/scan", { method: "POST" });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         setMessage(data.error ?? "Error al escanear");
