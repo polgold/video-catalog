@@ -29,7 +29,10 @@ export async function GET(
     return NextResponse.json({ error: "Dropbox not connected" }, { status: 401 });
   }
 
-  const dbx = new Dropbox({ accessToken: creds.access_token });
+  const dbx = new Dropbox({
+    accessToken: creds.access_token,
+    fetch: globalThis.fetch.bind(globalThis),
+  });
   try {
     const link = await dbx.filesGetTemporaryLink({ path: video.path ?? video.dropbox_file_id });
     const result = link.result as { link: string };

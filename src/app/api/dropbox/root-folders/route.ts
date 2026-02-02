@@ -17,7 +17,10 @@ export async function GET() {
     return NextResponse.json({ error: "Dropbox not connected" }, { status: 401 });
   }
 
-  const dbx = new Dropbox({ accessToken: creds.access_token });
+  const dbx = new Dropbox({
+    accessToken: creds.access_token,
+    fetch: globalThis.fetch.bind(globalThis),
+  });
 
   try {
     const res = await dbx.filesListFolder({

@@ -22,7 +22,10 @@ export async function POST() {
     return NextResponse.json({ error: "Dropbox not connected" }, { status: 401 });
   }
 
-  const dbx = new Dropbox({ accessToken: creds.access_token });
+  const dbx = new Dropbox({
+    accessToken: creds.access_token,
+    fetch: globalThis.fetch.bind(globalThis),
+  });
 
   const { data: sources } = await supabase.from("sources").select("id, dropbox_folder_id, path, cursor");
 
