@@ -251,17 +251,128 @@ Transcript:\n${transcriptText.slice(0, 15000)}\nFilename: ${video.filename || "v
   }
 }
 
+function normPath(p) {
+  const s = (p ?? "").trim().replace(/\/+/g, "/");
+  const withLead = s.startsWith("/") ? s : s ? `/${s}` : "";
+  return withLead.endsWith("/") && withLead.length > 1 ? withLead.slice(0, -1) : withLead;
+}
+
+function isVideo(path) {
+  const lower = (path || "").toLowerCase();
+  return [".mp4", ".mov", ".mxf", ".mkv"].some((ext) => lower.endsWith(ext));
+}
+
+async function processScanJob(supabase, job) {
+  const jobId = job.id;
+  const paths = job.payload?.paths;
+  if (!Array.isArray(paths) || paths.length === 0) {
+    await supabase.from("jobs").update({ status: "failed", error: "payload.paths missing or empty", completed_at: new Date().toISOString() }).eq("id", jobId);
+    return;
+  }
+  const normalizedPaths = paths.map((p) => normPath(p)).filter(Boolean);
+  if (normalizedPaths.length === 0) {
+    await supabase.from("jobs").update({ status: "failed", error: "No valid paths", completed_at: new Date().toISOString() }).eq("id", jobId);
+    return;
+  }
+  console.log("[scan] paths recibidos:", normalizedPaths.length, normalizedPaths);
+
+  await supabase.from("jobs").update({ status: "running", started_at: new Date().toISOString() }).eq("id", jobId);
+
+  let totalAdded = 0;
+  try {
+    const token = await getDropboxToken(supabase);
+    const dbx = new Dropbox({ accessToken: token });
+
+    for (const folderPath of normalizedPaths) {
+      let { data: source } = await supabase.from("sources").select("id, dropbox_folder_id, path, cursor").eq("path", folderPath).maybeSingle();
+      if (!source) {
+        const { data: byDropboxId } = await supabase.from("sources").select("id, dropbox_folder_id, path, cursor").eq("dropbox_folder_id", folderPath).maybeSingle();
+        source = byDropboxId;
+      }
+      if (!source) {
+        const { data: inserted, error: insErr } = await supabase.from("sources").insert({ dropbox_folder_id: folderPath, path: folderPath, provider: "dropbox" }).select("id, dropbox_folder_id, path, cursor").single();
+        if (insErr) {
+          console.warn("[scan] skip path (no source):", folderPath, insErr.message);
+          continue;
+        }
+        source = inserted;
+      }
+      let cursor = source.cursor || null;
+      let hasMore = true;
+      while (hasMore) {
+        let entries = [];
+        let nextCursor;
+        if (cursor) {
+          const res = await dbx.filesListFolderContinue({ cursor });
+          entries = res.result.entries || [];
+          hasMore = res.result.has_more || false;
+          nextCursor = res.result.cursor;
+        } else {
+          const res = await dbx.filesListFolder({
+            path: source.dropbox_folder_id || source.path,
+            recursive: true,
+            include_has_explicit_shared_members: false,
+            include_media_info: false,
+          });
+          entries = res.result.entries || [];
+          hasMore = res.result.has_more || false;
+          nextCursor = res.result.cursor;
+        }
+        for (const entry of entries) {
+          if (entry[".tag"] !== "file") continue;
+          const path = entry.path_display || "";
+          if (!isVideo(path)) continue;
+          const { data: existing } = await supabase.from("videos").select("id").eq("dropbox_file_id", entry.id).maybeSingle();
+          if (existing) continue;
+          const { data: video, error: insertErr } = await supabase
+            .from("videos")
+            .insert({
+              source_id: source.id,
+              dropbox_file_id: entry.id,
+              path,
+              filename: (path.split("/").pop() || path),
+              status: "pending_ingest",
+            })
+            .select("id")
+            .single();
+          if (insertErr) continue;
+          if (video) {
+            await supabase.from("jobs").insert({ video_id: video.id, type: "ingest", status: "pending", payload: {} });
+            totalAdded++;
+          }
+        }
+        if (nextCursor) {
+          await supabase.from("sources").update({ cursor: nextCursor, updated_at: new Date().toISOString() }).eq("id", source.id);
+          cursor = nextCursor;
+        } else {
+          hasMore = false;
+        }
+      }
+    }
+    await supabase.from("jobs").update({ status: "done", completed_at: new Date().toISOString(), result: { added: totalAdded } }).eq("id", jobId);
+    console.log("[scan] done, added:", totalAdded);
+  } catch (err) {
+    console.error("[scan] error:", err);
+    await supabase.from("jobs").update({ status: "failed", error: err.message, completed_at: new Date().toISOString() }).eq("id", jobId);
+  }
+}
+
 async function poll(supabase) {
   const { data: jobs } = await supabase
     .from("jobs")
     .select("*")
-    .in("type", ["ingest", "process"])
+    .in("type", ["ingest", "process", "scan"])
     .eq("status", "pending")
     .order("created_at", { ascending: true })
     .limit(1);
 
   if (jobs?.length) {
-    await processJob(supabase, jobs[0]);
+    const job = jobs[0];
+    if (job.type === "scan") {
+      await processScanJob(supabase, job);
+    } else {
+      await processJob(supabase, job);
+    }
   }
 }
 

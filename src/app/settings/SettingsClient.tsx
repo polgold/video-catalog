@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 
 type Source = { id: string; path: string };
-type FolderEntry = { path: string; name: string };
+type FolderEntry = { name: string; path_lower: string; path_display: string };
 
 const fetchApi: typeof fetch =
   typeof window !== "undefined" ? window.fetch.bind(window) : fetch;
@@ -36,7 +36,8 @@ export default function SettingsClient({
   const [loadingCol3, setLoadingCol3] = useState(false);
   const [togglingPath, setTogglingPath] = useState<string | null>(null);
   const [scanning, setScanning] = useState(false);
-  const [scanProgress, setScanProgress] = useState<{ folder: string; index: number; total: number; added: number; totalAdded: number } | null>(null);
+  const [scanJobId, setScanJobId] = useState<string | null>(null);
+  const [scanJobStatus, setScanJobStatus] = useState<{ status: string; error?: string; result?: { added?: number } } | null>(null);
   const [disconnecting, setDisconnecting] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [connectionInvalidated, setConnectionInvalidated] = useState(false);
@@ -56,7 +57,7 @@ export default function SettingsClient({
     if (!showConnectedUI) return;
     setLoadingCol1(true);
     setMessage(null);
-    fetchApi("/api/dropbox/root-folders")
+    fetchApi("/api/dropbox/list-folders?path=")
       .then((res) => {
         if (!res.ok) return res.json().then((d) => Promise.reject(new Error(d.error ?? res.statusText)));
         return res.json();
@@ -65,7 +66,7 @@ export default function SettingsClient({
         const list = Array.isArray(data) ? data : (data?.folders ?? []);
         const sorted = (Array.isArray(list) ? list : [])
           .slice()
-          .sort((a, b) => (a.name || a.path).localeCompare(b.name || b.path, undefined, { sensitivity: "base" }));
+          .sort((a, b) => (a.name || a.path_lower).localeCompare(b.name || b.path_lower, undefined, { sensitivity: "base" }));
         setCol1(sorted);
         setCol2([]);
         setCol3([]);
@@ -81,10 +82,10 @@ export default function SettingsClient({
     loadRootFolders();
   }, [showConnectedUI, loadRootFolders]);
 
-  const loadChildren = useCallback((path: string, setLoading: (v: boolean) => void, setEntries: (e: FolderEntry[]) => void) => {
+  const loadChildren = useCallback((pathLower: string, setLoading: (v: boolean) => void, setEntries: (e: FolderEntry[]) => void) => {
     setLoading(true);
-    const encoded = encodeURIComponent(path);
-    fetchApi(`/api/dropbox/folder-children?path=${encoded}`)
+    const encoded = encodeURIComponent(pathLower);
+    fetchApi(`/api/dropbox/list-folders?path=${encoded}`)
       .then((res) => {
         if (!res.ok) return res.json().then((d) => Promise.reject(new Error(d.error ?? res.statusText)));
         return res.json();
@@ -93,7 +94,7 @@ export default function SettingsClient({
         const list = Array.isArray(data) ? data : (data?.folders ?? []);
         const sorted = (Array.isArray(list) ? list : [])
           .slice()
-          .sort((a, b) => (a.name || a.path).localeCompare(b.name || b.path, undefined, { sensitivity: "base" }));
+          .sort((a, b) => (a.name || a.path_lower).localeCompare(b.name || b.path_lower, undefined, { sensitivity: "base" }));
         setEntries(sorted);
       })
       .catch(() => setEntries([]))
@@ -166,9 +167,9 @@ export default function SettingsClient({
   async function selectAllRoots() {
     if (!col1.length) return;
     setMessage(null);
-    const toAdd = col1.filter((f) => !isSelected(normPath(f.path)));
+    const toAdd = col1.filter((f) => !isSelected(normPath(f.path_lower || f.path_display)));
     for (const f of toAdd) {
-      const n = normPath(f.path);
+      const n = normPath(f.path_lower || f.path_display);
       const res = await fetchApi("/api/dropbox/sources", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -219,74 +220,62 @@ export default function SettingsClient({
       setMessage("Seleccioná al menos una carpeta para ejecutar el scan.");
       return;
     }
+    const selectedFolders = sources.map((s) => normPath(s.path));
     setScanning(true);
-    setScanProgress(null);
+    setScanJobId(null);
+    setScanJobStatus(null);
     setMessage(null);
     try {
-      const res = await fetchApi("/api/dropbox/scan", {
+      const res = await fetchApi("/api/scan/start", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sourceIds: sources.map((s) => s.id), stream: true }),
+        body: JSON.stringify({ selectedFolders }),
       });
+      const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        const hint = (data as { hint?: string }).hint;
-        setMessage(hint ? `${data.error ?? "Error al escanear"}. ${hint}` : (data.error ?? "Error al escanear"));
+        setMessage(data.error ?? "Error al iniciar scan");
+        setScanning(false);
         return;
       }
-      if (res.body == null) {
-        setMessage("Error al escanear: respuesta sin cuerpo");
+      const jobId = data.jobId;
+      if (!jobId) {
+        setMessage("Error: no se recibió jobId");
+        setScanning(false);
         return;
       }
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n\n");
-        buffer = lines.pop() ?? "";
-        for (const line of lines) {
-          const dataStr = line.replace(/^data: /, "").trim();
-          if (!dataStr) continue;
-          try {
-            const data = JSON.parse(dataStr) as { type?: string; error?: string; folder?: string; index?: number; total?: number; added?: number; totalAdded?: number };
-            if (data.type === "progress" && data.folder != null && data.index != null && data.total != null) {
-              setScanProgress({
-                folder: data.folder,
-                index: data.index,
-                total: data.total,
-                added: data.added ?? 0,
-                totalAdded: data.totalAdded ?? 0,
-              });
-            } else if (data.type === "done") {
-              setScanProgress(null);
-              setMessage(`Scan completado. ${data.totalAdded ?? 0} videos nuevos añadidos a la cola.`);
-            } else if (data.type === "error" && data.error) {
-              setScanProgress(null);
-              setMessage(`Error al escanear: ${data.error}`);
-            }
-          } catch {
-            // ignore parse errors
-          }
+      setScanJobId(jobId);
+      setMessage(`Scan iniciado (job ${jobId.slice(0, 8)}…). El worker procesará en background.`);
+      const pollStatus = async () => {
+        const statusRes = await fetchApi(`/api/jobs/${jobId}`);
+        const job = await statusRes.json().catch(() => ({}));
+        setScanJobStatus({
+          status: job.status ?? "pending",
+          error: job.error,
+          result: job.result,
+        });
+        if (job.status === "done") {
+          setMessage(`Scan completado. ${job.result?.added ?? 0} videos nuevos añadidos a la cola.`);
+          setScanning(false);
+          setScanJobId(null);
+          setScanJobStatus(null);
+          return;
         }
-      }
-      if (buffer.trim()) {
-        try {
-          const data = JSON.parse(buffer.replace(/^data: /, "").trim()) as { type?: string; error?: string; totalAdded?: number };
-          if (data.type === "done") setMessage(`Scan completado. ${data.totalAdded ?? 0} videos nuevos añadidos a la cola.`);
-          else if (data.type === "error" && data.error) setMessage(`Error al escanear: ${data.error}`);
-        } catch {
-          // ignore
+        if (job.status === "failed") {
+          setMessage(`Error al escanear: ${job.error ?? "unknown"}`);
+          setScanning(false);
+          setScanJobId(null);
+          setScanJobStatus(null);
+          return;
         }
-      }
+        setTimeout(pollStatus, 3000);
+      };
+      pollStatus();
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      setMessage(`Error de red o timeout. El scan puede tardar mucho en carpetas grandes. Detalle: ${msg}`);
-    } finally {
+      setMessage(`Error de red. Detalle: ${msg}`);
       setScanning(false);
-      setScanProgress(null);
+      setScanJobId(null);
+      setScanJobStatus(null);
     }
   }
 
@@ -323,17 +312,18 @@ export default function SettingsClient({
           ) : (
             <ul className="divide-y divide-zinc-800">
               {entries.map((folder) => {
-                const pathNorm = normPath(folder.path);
+                const pathLower = folder.path_lower || folder.path_display || "";
+                const pathNorm = normPath(pathLower);
                 const selected = isSelected(pathNorm);
                 const busy = togglingPath === pathNorm;
                 const isRowSelected = selectedPath === pathNorm;
                 return (
                   <li
-                    key={folder.path}
+                    key={pathLower || folder.name}
                     className={`flex items-center gap-2 px-3 py-2 hover:bg-zinc-700/50 transition-colors cursor-pointer ${
                       isRowSelected ? "bg-zinc-700/70" : ""
                     }`}
-                    onClick={() => onSelect(pathNorm)}
+                    onClick={() => onSelect(pathLower)}
                   >
                     <label
                       className="flex items-center gap-2 flex-1 min-w-0 cursor-pointer"
@@ -348,8 +338,8 @@ export default function SettingsClient({
                         onChange={() => toggleFolder(pathNorm)}
                         className="rounded border-zinc-600 bg-zinc-800 text-blue-600 focus:ring-blue-500 w-4 h-4 shrink-0"
                       />
-                      <span className="text-sm text-white truncate" title={folder.path}>
-                        {folder.name || folder.path || "/"}
+                      <span className="text-sm text-white truncate" title={folder.path_display || pathLower}>
+                        {folder.name || folder.path_display || pathLower || "/"}
                       </span>
                     </label>
                   </li>
@@ -441,14 +431,16 @@ export default function SettingsClient({
             >
               {scanning ? "Escaneando…" : "Ejecutar scan incremental"}
             </button>
-            {scanProgress && (
+            {scanning && scanJobStatus && (
               <p className="text-sm text-emerald-300/90 mt-2">
-                Carpeta {scanProgress.index} de {scanProgress.total}: {scanProgress.folder} — {scanProgress.totalAdded} videos añadidos hasta ahora.
+                Estado: {scanJobStatus.status}
+                {scanJobStatus.error && ` — Error: ${scanJobStatus.error}`}
+                {scanJobStatus.result?.added != null && scanJobStatus.status === "done" && ` — ${scanJobStatus.result.added} videos añadidos`}
               </p>
             )}
-            {scanning && !scanProgress && (
+            {scanning && !scanJobStatus && (
               <p className="text-xs text-zinc-400 mt-2">
-                Conectando con Dropbox… (puede tardar varios minutos en carpetas grandes)
+                Iniciando scan en background… El worker procesará las carpetas.
               </p>
             )}
             {sources.length === 0 && (
