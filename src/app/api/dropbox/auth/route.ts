@@ -4,7 +4,10 @@ const DROPBOX_OAUTH = "https://www.dropbox.com/oauth2/authorize";
 const VIDEO_EXT = [".mp4", ".mov", ".mxf", ".mkv"];
 
 export async function GET(request: Request) {
-  const appKey = process.env.NEXT_PUBLIC_DROPBOX_APP_KEY ?? process.env.DROPBOX_APP_KEY;
+  const appKey =
+    process.env.NEXT_PUBLIC_DROPBOX_APP_KEY ??
+    process.env.DROPBOX_APP_KEY ??
+    process.env.DROPBOX_CLIENT_ID;
   const baseUrl = process.env.NEXT_PUBLIC_APP_URL ?? new URL(request.url).origin;
   const redirectUri = `${baseUrl}/api/dropbox/callback`;
 

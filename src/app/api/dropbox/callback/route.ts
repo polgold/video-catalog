@@ -23,8 +23,11 @@ export async function GET(request: Request) {
 
   const baseUrl = process.env.NEXT_PUBLIC_APP_URL ?? new URL(request.url).origin;
   const redirectUri = `${baseUrl}/api/dropbox/callback`;
-  const appKey = process.env.NEXT_PUBLIC_DROPBOX_APP_KEY ?? process.env.DROPBOX_APP_KEY;
-  const appSecret = process.env.DROPBOX_APP_SECRET;
+  const appKey =
+    process.env.NEXT_PUBLIC_DROPBOX_APP_KEY ??
+    process.env.DROPBOX_APP_KEY ??
+    process.env.DROPBOX_CLIENT_ID;
+  const appSecret = process.env.DROPBOX_APP_SECRET ?? process.env.DROPBOX_CLIENT_SECRET;
 
   if (!appKey || !appSecret) {
     return NextResponse.redirect(`${baseUrl}/settings?dropbox=config_error`);
