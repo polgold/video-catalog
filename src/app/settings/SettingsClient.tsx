@@ -29,6 +29,7 @@ export default function SettingsClient({
   const [connectionInvalidated, setConnectionInvalidated] = useState(false);
   const [togglingPath, setTogglingPath] = useState<string | null>(null);
   const [scanning, setScanning] = useState(false);
+  const [disconnecting, setDisconnecting] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
   const justConnected = searchParams.get("dropbox") === "connected";
@@ -113,6 +114,24 @@ export default function SettingsClient({
     window.location.href = "/api/dropbox/auth";
   }
 
+  async function disconnectDropbox() {
+    setDisconnecting(true);
+    setMessage(null);
+    try {
+      const res = await fetchApi("/api/dropbox/disconnect", { method: "POST" });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setMessage(data.error ?? "Error al desconectar");
+        return;
+      }
+      setConnectionInvalidated(true);
+      setMessage("Desconectado. Conectá de nuevo para usar los nuevos permisos (files.metadata.read).");
+      router.refresh();
+    } finally {
+      setDisconnecting(false);
+    }
+  }
+
   async function runScan() {
     setScanning(true);
     setMessage(null);
@@ -155,6 +174,19 @@ export default function SettingsClient({
 
       {showConnectedUI && (
         <>
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={disconnectDropbox}
+              disabled={disconnecting}
+              className="px-4 py-2 rounded-lg border border-zinc-600 text-zinc-300 hover:bg-zinc-800 disabled:opacity-50 transition-colors"
+            >
+              {disconnecting ? "Desconectando…" : "Desconectar Dropbox"}
+            </button>
+            <span className="text-xs text-zinc-500">
+              Si ves &quot;missing_scope&quot;, desconectá y conectá de nuevo (y activá files.metadata.read en la app de Dropbox).
+            </span>
+          </div>
           <div>
             <h3 className="text-sm font-medium text-zinc-300 mb-3">Carpetas a escanear</h3>
             <p className="text-xs text-zinc-500 mb-4">
