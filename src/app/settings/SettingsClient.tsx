@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 
 type Source = { id: string; path: string };
 
@@ -11,15 +12,24 @@ export default function SettingsClient({
   dropboxConnected: boolean;
   sources: Source[];
 }) {
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const [sources, setSources] = useState<Source[]>(initialSources);
   const [newPath, setNewPath] = useState("");
   const [adding, setAdding] = useState(false);
   const [scanning, setScanning] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
+  const justConnected = searchParams.get("dropbox") === "connected";
+  const showConnectedUI = dropboxConnected || justConnected;
+
   useEffect(() => {
     setSources(initialSources);
   }, [initialSources]);
+
+  useEffect(() => {
+    if (justConnected) router.refresh();
+  }, [justConnected, router]);
 
   async function connectDropbox() {
     window.location.href = "/api/dropbox/auth";
@@ -82,7 +92,7 @@ export default function SettingsClient({
 
   return (
     <div className="space-y-6">
-      {!dropboxConnected && (
+      {!showConnectedUI && (
         <button
           onClick={connectDropbox}
           className="px-4 py-2 rounded bg-blue-600 text-white font-medium hover:bg-blue-500"
@@ -91,10 +101,10 @@ export default function SettingsClient({
         </button>
       )}
 
-      {dropboxConnected && (
+      {showConnectedUI && (
         <>
           <div>
-            <label className="block text-sm text-zinc-400 mb-2">Añadir carpeta (ruta en Dropbox, ej. /Videos)</label>
+            <label className="block text-sm text-zinc-400 mb-2">Carpetas a escanear (ruta en Dropbox, ej. /Videos)</label>
             <div className="flex gap-2">
               <input
                 type="text"

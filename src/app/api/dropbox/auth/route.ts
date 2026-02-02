@@ -9,7 +9,8 @@ export async function GET(request: Request) {
     process.env.DROPBOX_APP_KEY ??
     process.env.DROPBOX_CLIENT_ID;
   const baseUrl = process.env.NEXT_PUBLIC_APP_URL ?? new URL(request.url).origin;
-  const redirectUri = `${baseUrl}/api/dropbox/callback`;
+  const redirectUri =
+    process.env.DROPBOX_REDIRECT_URI ?? `${baseUrl}/api/dropbox/callback`;
 
   if (!appKey) {
     return NextResponse.json({ error: "Dropbox app key not configured" }, { status: 500 });
