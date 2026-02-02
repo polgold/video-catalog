@@ -14,7 +14,14 @@ export async function GET() {
     .single();
 
   if (credError || !creds?.access_token) {
+    if (process.env.NODE_ENV === "development") {
+      console.log("[root-folders] token presente: false");
+    }
     return NextResponse.json({ error: "Dropbox not connected" }, { status: 401 });
+  }
+
+  if (process.env.NODE_ENV === "development") {
+    console.log("[root-folders] token presente: true");
   }
 
   const dbx = new Dropbox({
@@ -22,24 +29,45 @@ export async function GET() {
     fetch: globalThis.fetch.bind(globalThis),
   });
 
-  try {
-    const res = await dbx.filesListFolder({
-      path: "",
-      recursive: false,
-      include_has_explicit_shared_members: false,
-      include_media_info: false,
-    });
+  const ROOT_PATH = "";
+  if (process.env.NODE_ENV === "development") {
+    console.log("[root-folders] path enviado a Dropbox:", JSON.stringify(ROOT_PATH));
+  }
 
-    const entries = (res.result.entries as DropboxEntry[]) ?? [];
-    const folders = entries
+  try {
+    const allEntries: DropboxEntry[] = [];
+    let cursor: string | undefined;
+    let hasMore = true;
+
+    while (hasMore) {
+      const res = cursor
+        ? await dbx.filesListFolderContinue({ cursor })
+        : await dbx.filesListFolder({
+            path: ROOT_PATH,
+            recursive: false,
+            include_has_explicit_shared_members: false,
+            include_media_info: false,
+          });
+
+      const entries = (res.result.entries as DropboxEntry[]) ?? [];
+      allEntries.push(...entries);
+      hasMore = res.result.has_more ?? false;
+      cursor = res.result.cursor;
+    }
+
+    const folders = allEntries
       .filter((e) => e[".tag"] === "folder")
       .map((e) => ({
-        path: e.path_display ?? (e.name ? `/${e.name}` : ""),
         name: e.name ?? (e.path_display ?? "").split("/").pop() ?? "",
+        path: e.path_display ?? (e.name ? `/${e.name}` : ""),
       }))
       .filter((f) => f.path);
 
-    return NextResponse.json(folders);
+    if (process.env.NODE_ENV === "development") {
+      console.log("[root-folders] carpetas recibidas:", folders.length, folders.map((f) => f.path));
+    }
+
+    return NextResponse.json({ folders });
   } catch (err: unknown) {
     const dropboxError = err as { status?: number; error?: unknown; message?: string };
     const status = dropboxError.status ?? 500;

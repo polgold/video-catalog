@@ -9,9 +9,32 @@ type RootFolder = { path: string; name: string };
 const fetchApi: typeof fetch =
   typeof window !== "undefined" ? window.fetch.bind(window) : fetch;
 
+const STORAGE_KEY_SELECTED_FOLDERS = "video-catalog-selected-folders";
+
 function normPath(p: string): string {
   const s = (p ?? "").trim();
   return s.startsWith("/") ? s : `/${s}`;
+}
+
+function loadSelectedPathsFromStorage(): string[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY_SELECTED_FOLDERS);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as unknown;
+    return Array.isArray(parsed) ? parsed.filter((x) => typeof x === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveSelectedPathsToStorage(paths: string[]) {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.setItem(STORAGE_KEY_SELECTED_FOLDERS, JSON.stringify(paths));
+  } catch {
+    // ignore
+  }
 }
 
 export default function SettingsClient({
@@ -31,12 +54,19 @@ export default function SettingsClient({
   const [scanning, setScanning] = useState(false);
   const [disconnecting, setDisconnecting] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [foldersError, setFoldersError] = useState<string | null>(null);
 
   const justConnected = searchParams.get("dropbox") === "connected";
   const showConnectedUI = (dropboxConnected || justConnected) && !connectionInvalidated;
 
   useEffect(() => {
     setSources(initialSources);
+    const stored = loadSelectedPathsFromStorage();
+    if (stored.length && !initialSources.length) {
+      saveSelectedPathsToStorage([]);
+    } else if (initialSources.length) {
+      saveSelectedPathsToStorage(initialSources.map((s) => normPath(s.path)));
+    }
   }, [initialSources]);
 
   useEffect(() => {
@@ -47,6 +77,7 @@ export default function SettingsClient({
     if (!dropboxConnected && !justConnected) return;
     setFoldersLoading(true);
     setMessage(null);
+    setFoldersError(null);
     setConnectionInvalidated(false);
     fetchApi("/api/dropbox/root-folders")
       .then((res) => {
@@ -57,13 +88,20 @@ export default function SettingsClient({
               setConnectionInvalidated(true);
               setMessage("Dropbox no está conectado. Conectá tu cuenta para listar y elegir carpetas.");
             }
+            setFoldersError(msg);
             return Promise.reject(new Error(msg));
           });
         }
         return res.json();
       })
-      .then((data: RootFolder[]) => setRootFolders(Array.isArray(data) ? data : []))
-      .catch((err) => setMessage(err instanceof Error ? err.message : "Error al cargar carpetas"))
+      .then((data: { folders?: RootFolder[] } | RootFolder[]) => {
+        const list = Array.isArray(data) ? data : (data?.folders ?? []);
+        setRootFolders(Array.isArray(list) ? list : []);
+        setFoldersError(null);
+      })
+      .catch((err) => {
+        setFoldersError(err instanceof Error ? err.message : "Error al cargar carpetas");
+      })
       .finally(() => setFoldersLoading(false));
   }, [dropboxConnected, justConnected]);
 
@@ -91,7 +129,11 @@ export default function SettingsClient({
           setMessage(data.error ?? "Error al quitar carpeta");
           return;
         }
-        setSources((prev) => prev.filter((s) => s.id !== id));
+        setSources((prev) => {
+          const next = prev.filter((s) => s.id !== id);
+          saveSelectedPathsToStorage(next.map((s) => normPath(s.path)));
+          return next;
+        });
       } else {
         const res = await fetchApi("/api/dropbox/sources", {
           method: "POST",
@@ -103,7 +145,11 @@ export default function SettingsClient({
           setMessage(data.error ?? "Error al añadir carpeta");
           return;
         }
-        setSources((prev) => [...prev, { id: data.id, path: data.path ?? path }]);
+        setSources((prev) => {
+          const next = [...prev, { id: data.id, path: data.path ?? path }];
+          saveSelectedPathsToStorage(next.map((s) => normPath(s.path)));
+          return next;
+        });
       }
     } finally {
       setTogglingPath(null);
@@ -133,10 +179,19 @@ export default function SettingsClient({
   }
 
   async function runScan() {
+    const selectedPaths = sources.map((s) => normPath(s.path));
+    if (!selectedPaths.length) {
+      setMessage("Seleccioná al menos una carpeta para ejecutar el scan.");
+      return;
+    }
     setScanning(true);
     setMessage(null);
     try {
-      const res = await fetchApi("/api/dropbox/scan", { method: "POST" });
+      const res = await fetchApi("/api/dropbox/scan", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ folders: selectedPaths }),
+      });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         setMessage(data.error ?? "Error al escanear");
@@ -196,9 +251,13 @@ export default function SettingsClient({
               <div className="rounded-lg border border-zinc-800 bg-zinc-800/30 p-6 text-center text-zinc-400 text-sm">
                 Cargando carpetas…
               </div>
-            ) : rootFolders.length === 0 && !foldersLoading ? (
+            ) : foldersError ? (
+              <div className="rounded-lg border border-zinc-800 bg-zinc-800/30 p-6 text-center text-red-300 text-sm">
+                {foldersError}
+              </div>
+            ) : rootFolders.length === 0 ? (
               <div className="rounded-lg border border-zinc-800 bg-zinc-800/30 p-6 text-center text-zinc-500 text-sm">
-                No se encontraron carpetas en la raíz o no se pudo conectar a Dropbox.
+                No se encontraron carpetas en la raíz de Dropbox.
               </div>
             ) : (
               <ul className="rounded-lg border border-zinc-800 divide-y divide-zinc-800 overflow-hidden">
@@ -244,6 +303,11 @@ export default function SettingsClient({
             >
               {scanning ? "Escaneando…" : "Ejecutar scan incremental"}
             </button>
+            {sources.length === 0 && (
+              <p className="text-xs text-amber-400/90 mt-2">
+                Seleccioná al menos una carpeta para ejecutar el scan.
+              </p>
+            )}
             <p className="text-xs text-zinc-500 mt-2">
               Detecta archivos nuevos o modificados en las carpetas seleccionadas y crea jobs de ingest. El worker
               procesará cada video (metadata, keyframes, transcripción, LLM, duplicados).

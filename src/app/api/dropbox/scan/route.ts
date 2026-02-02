@@ -9,8 +9,29 @@ function isVideo(path: string): boolean {
   return VIDEO_EXT.some((ext) => lower.endsWith(ext));
 }
 
-export async function POST() {
+type ScanBody = { folders?: string[] };
+
+export async function POST(request: Request) {
   const supabase = createSupabaseServer();
+
+  let body: ScanBody = {};
+  try {
+    body = await request.json();
+  } catch {
+    // body vacío o inválido
+  }
+  const folders = Array.isArray(body.folders) ? body.folders : [];
+
+  if (!folders.length) {
+    if (process.env.NODE_ENV === "development") {
+      console.log("[scan] carpetas recibidas: 0 → 400");
+    }
+    return NextResponse.json({ error: "No folders selected" }, { status: 400 });
+  }
+
+  if (process.env.NODE_ENV === "development") {
+    console.log("[scan] carpetas recibidas:", folders.length, folders);
+  }
 
   const { data: creds, error: credError } = await supabase
     .from("dropbox_credentials")
@@ -19,7 +40,14 @@ export async function POST() {
     .single();
 
   if (credError || !creds?.access_token) {
+    if (process.env.NODE_ENV === "development") {
+      console.log("[scan] token presente: false");
+    }
     return NextResponse.json({ error: "Dropbox not connected" }, { status: 401 });
+  }
+
+  if (process.env.NODE_ENV === "development") {
+    console.log("[scan] token presente: true");
   }
 
   const dbx = new Dropbox({
@@ -27,10 +55,16 @@ export async function POST() {
     fetch: globalThis.fetch.bind(globalThis),
   });
 
-  const { data: sources } = await supabase.from("sources").select("id, dropbox_folder_id, path, cursor");
+  const { data: allSources } = await supabase.from("sources").select("id, dropbox_folder_id, path, cursor");
+  const pathSet = new Set(folders.map((p) => (p.startsWith("/") ? p : `/${p}`)));
+  const sources = (allSources ?? []).filter((s) => pathSet.has(s.path));
 
-  if (!sources?.length) {
-    return NextResponse.json({ message: "No folders to scan", added: 0 });
+  if (!sources.length) {
+    return NextResponse.json({ error: "No matching sources for selected folders" }, { status: 400 });
+  }
+
+  if (process.env.NODE_ENV === "development") {
+    console.log("[scan] path enviado a Dropbox (sources):", sources.map((s) => s.path));
   }
 
   let totalAdded = 0;
