@@ -1,0 +1,3 @@
+-- Storage bucket for keyframes (run in Supabase Dashboard or via API)
+-- insert into storage.buckets (id, name, public) values ('keyframes', 'keyframes', true);
+-- RLS for keyframes: allow read for public, write for service
