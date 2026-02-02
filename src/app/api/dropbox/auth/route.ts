@@ -23,6 +23,7 @@ export async function GET(request: Request) {
     response_type: "code",
     state,
     token_access_type: "offline",
+    scope: "files.metadata.read files.content.read",
   });
 
   const url = `${DROPBOX_OAUTH}?${params.toString()}`;

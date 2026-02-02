@@ -40,8 +40,16 @@ export async function GET() {
       .filter((f) => f.path);
 
     return NextResponse.json(folders);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : "Failed to list folders";
+  } catch (err: unknown) {
+    const dropboxError = err as { status?: number; error?: unknown; message?: string };
+    const status = dropboxError.status ?? 500;
+    const detail = dropboxError.error
+      ? JSON.stringify(dropboxError.error)
+      : dropboxError.message ?? "Failed to list folders";
+    const message =
+      status === 400
+        ? `Dropbox API 400. Revisá que la app tenga permisos "files.metadata.read". Detalle: ${detail}`
+        : detail;
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }
