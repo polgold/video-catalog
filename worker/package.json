@@ -1,0 +1,15 @@
+{
+  "name": "video-catalog-worker",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node index.mjs",
+    "poll": "node index.mjs"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.47.0",
+    "dropbox": "^10.34.0",
+    "openai": "^4.73.0"
+  }
+}

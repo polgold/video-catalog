@@ -1,3 +1,4 @@
--- Storage bucket for keyframes (run in Supabase Dashboard or via API)
+-- Storage bucket for keyframes
+-- Crear en Supabase Dashboard: Storage -> New bucket -> name: keyframes, Public: true
+-- O vía SQL (si tienes acceso a storage.buckets):
 -- insert into storage.buckets (id, name, public) values ('keyframes', 'keyframes', true);
--- RLS for keyframes: allow read for public, write for service

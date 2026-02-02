@@ -1,36 +1,74 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Video Catalog
 
-## Getting Started
+Web app para catalogar, revisar y publicar videos desde Dropbox.
 
-First, run the development server:
+## Stack
+
+- **Next.js (App Router)** – UI + API routes
+- **Supabase Postgres** – base de datos
+- **Supabase Storage** – keyframes
+- **Worker (Node)** – cola de jobs: ingest (ffmpeg, Whisper, LLM, duplicados)
+
+## Requisitos previos
+
+- Node 18+
+- ffmpeg en PATH (para el worker)
+- Cuenta Supabase, Dropbox (app OAuth), OpenAI (Whisper + GPT)
+
+## Configuración
+
+1. Copia `.env.example` a `.env.local` y rellena:
+   - `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`
+   - `DROPBOX_APP_KEY`, `DROPBOX_APP_SECRET`, `NEXT_PUBLIC_DROPBOX_APP_KEY`
+   - `OPENAI_API_KEY`
+   - `NEXT_PUBLIC_APP_URL` (ej. `http://localhost:3000`)
+
+2. **Supabase**
+   - Crea el proyecto y ejecuta las migraciones en `supabase/migrations/`.
+   - Crea un bucket en Storage llamado `keyframes` (público para lectura).
+
+3. **Dropbox**
+   - Crea una app en https://www.dropbox.com/developers/apps (Full Dropbox o App folder).
+   - En Redirect URI pon: `{NEXT_PUBLIC_APP_URL}/api/dropbox/callback`.
+
+## Desarrollo
 
 ```bash
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+- **Inbox**: `http://localhost:3000/inbox` – lista de videos `pending_review` con filtros.
+- **Settings**: `http://localhost:3000/settings` – conectar Dropbox, añadir carpetas, ejecutar scan.
+- **Detalle**: `/videos/[id]` – preview, keyframes, transcript, campos editables, Approve/Reject/Needs Fix, Publicar YouTube/Vimeo.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Worker
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Procesa jobs de tipo `ingest` y `process`: descarga desde Dropbox, extrae metadata/audio/keyframes (ffmpeg), sube keyframes a Supabase Storage, transcribe (Whisper), genera metadata con LLM, detecta duplicados (sha256) y actualiza el video a `pending_review`.
 
-## Learn More
+```bash
+cd worker
+npm install
+# Variables de entorno: NEXT_PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, OPENAI_API_KEY
+# El token de Dropbox se lee de la tabla dropbox_credentials.
+node index.mjs
+```
 
-To learn more about Next.js, take a look at the following resources:
+El worker hace polling cada 10 s a la tabla `jobs`. Asegúrate de que el bucket `keyframes` exista en Supabase Storage.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## API
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+- `GET /api/dropbox/auth` – redirige a OAuth Dropbox.
+- `GET /api/dropbox/callback` – callback OAuth, guarda token en DB.
+- `GET/POST/DELETE /api/dropbox/sources` – listar/añadir/eliminar carpetas.
+- `POST /api/dropbox/scan` – scan incremental (delta) y creación de jobs ingest.
+- `GET /api/videos?status=&source_id=&genre=&from=&to=&min_duration=&max_duration=` – listar videos.
+- `GET /PATCH /api/videos/[id]` – detalle y actualización.
+- `GET /api/videos/[id]/duplicates` – posibles duplicados.
+- `GET /api/videos/[id]/preview` – redirige a enlace temporal Dropbox del video.
+- `POST /api/videos/[id]/approve` | `reject` | `needs-fix` – cambiar estado.
+- `POST /api/videos/[id]/publish/youtube` | `publish/vimeo` – encolar publicación (el worker o un job externo puede subir a las plataformas).
 
-## Deploy on Vercel
+## Publicación YouTube/Vimeo
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Las rutas de publish crean un job `publish_youtube` o `publish_vimeo`. La subida real requiere implementar OAuth y upload en el worker o en un servicio aparte (Google APIs, Vimeo API), usando las credenciales guardadas en `platform_credentials`.
