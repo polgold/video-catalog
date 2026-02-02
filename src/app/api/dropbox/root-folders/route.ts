@@ -61,7 +61,8 @@ export async function GET() {
         name: e.name ?? (e.path_display ?? "").split("/").pop() ?? "",
         path: e.path_display ?? (e.name ? `/${e.name}` : ""),
       }))
-      .filter((f) => f.path);
+      .filter((f) => f.path)
+      .sort((a, b) => (a.name || a.path).localeCompare(b.name || b.path, undefined, { sensitivity: "base" }));
 
     if (process.env.NODE_ENV === "development") {
       console.log("[root-folders] carpetas recibidas:", folders.length, folders.map((f) => f.path));

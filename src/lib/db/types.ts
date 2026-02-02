@@ -21,6 +21,7 @@ export interface Source {
   id: string;
   dropbox_folder_id: string;
   path: string;
+  provider: string;
   cursor: string | null;
   created_at: string;
   updated_at: string;

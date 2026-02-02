@@ -28,7 +28,11 @@ export async function POST(request: Request) {
 
   const { data, error } = await supabase
     .from("sources")
-    .insert({ dropbox_folder_id: dropboxFolderId, path: dropboxFolderId })
+    .insert({
+      dropbox_folder_id: dropboxFolderId,
+      path: dropboxFolderId,
+      provider: "dropbox",
+    })
     .select()
     .single();
 

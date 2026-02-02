@@ -55,12 +55,25 @@ export async function POST(request: Request) {
     fetch: globalThis.fetch.bind(globalThis),
   });
 
+  function normPathForMatch(p: string): string {
+    const s = (p ?? "").trim().replace(/\/+/g, "/");
+    const withLead = s.startsWith("/") ? s : `/${s}`;
+    return withLead.endsWith("/") && withLead.length > 1 ? withLead.slice(0, -1) : withLead;
+  }
+
   const { data: allSources } = await supabase.from("sources").select("id, dropbox_folder_id, path, cursor");
-  const pathSet = new Set(folders.map((p) => (p.startsWith("/") ? p : `/${p}`)));
-  const sources = (allSources ?? []).filter((s) => pathSet.has(s.path));
+  const pathSet = new Set(folders.map(normPathForMatch));
+  const sources = (allSources ?? []).filter(
+    (s) => pathSet.has(normPathForMatch(s.path)) || pathSet.has(normPathForMatch(s.dropbox_folder_id))
+  );
 
   if (!sources.length) {
-    return NextResponse.json({ error: "No matching sources for selected folders" }, { status: 400 });
+    const payload: { error: string; hint?: string } = { error: "No matching sources for selected folders" };
+    if (process.env.NODE_ENV === "development") {
+      payload.hint =
+        "Requested: " + [...pathSet].join(" | ") + ". In DB: " + (allSources ?? []).map((s) => s.path).join(" | ");
+    }
+    return NextResponse.json(payload, { status: 400 });
   }
 
   if (process.env.NODE_ENV === "development") {
@@ -85,7 +98,7 @@ export async function POST(request: Request) {
       } else {
         const listRes = await dbx.filesListFolder({
           path: source.dropbox_folder_id,
-          recursive: true,
+          recursive: true, // incluye todas las subcarpetas
           include_has_explicit_shared_members: false,
           include_media_info: false,
         });

@@ -96,7 +96,10 @@ export default function SettingsClient({
       })
       .then((data: { folders?: RootFolder[] } | RootFolder[]) => {
         const list = Array.isArray(data) ? data : (data?.folders ?? []);
-        setRootFolders(Array.isArray(list) ? list : []);
+        const sorted = (Array.isArray(list) ? list : []).slice().sort((a, b) =>
+          (a.name || a.path).localeCompare(b.name || b.path, undefined, { sensitivity: "base" })
+        );
+        setRootFolders(sorted);
         setFoldersError(null);
       })
       .catch((err) => {
@@ -194,7 +197,8 @@ export default function SettingsClient({
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        setMessage(data.error ?? "Error al escanear");
+        const hint = (data as { hint?: string }).hint;
+        setMessage(hint ? `${data.error ?? "Error al escanear"}. ${hint}` : (data.error ?? "Error al escanear"));
         return;
       }
       setMessage(`Scan completado. ${data.added ?? 0} videos nuevos añadidos a la cola.`);
