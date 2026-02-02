@@ -1,40 +1,19 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 
 type Source = { id: string; path: string };
-type RootFolder = { path: string; name: string };
+type FolderEntry = { path: string; name: string };
 
 const fetchApi: typeof fetch =
   typeof window !== "undefined" ? window.fetch.bind(window) : fetch;
 
-const STORAGE_KEY_SELECTED_FOLDERS = "video-catalog-selected-folders";
-
+// Misma normalización que el servidor (scan y sources)
 function normPath(p: string): string {
-  const s = (p ?? "").trim();
-  return s.startsWith("/") ? s : `/${s}`;
-}
-
-function loadSelectedPathsFromStorage(): string[] {
-  if (typeof window === "undefined") return [];
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY_SELECTED_FOLDERS);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw) as unknown;
-    return Array.isArray(parsed) ? parsed.filter((x) => typeof x === "string") : [];
-  } catch {
-    return [];
-  }
-}
-
-function saveSelectedPathsToStorage(paths: string[]) {
-  if (typeof window === "undefined") return;
-  try {
-    localStorage.setItem(STORAGE_KEY_SELECTED_FOLDERS, JSON.stringify(paths));
-  } catch {
-    // ignore
-  }
+  const s = (p ?? "").trim().replace(/\/+/g, "/");
+  const withLead = s.startsWith("/") ? s : `/${s}`;
+  return withLead.endsWith("/") && withLead.length > 1 ? withLead.slice(0, -1) : withLead;
 }
 
 export default function SettingsClient({
@@ -47,66 +26,98 @@ export default function SettingsClient({
   const router = useRouter();
   const searchParams = useSearchParams();
   const [sources, setSources] = useState<Source[]>(initialSources);
-  const [rootFolders, setRootFolders] = useState<RootFolder[]>([]);
-  const [foldersLoading, setFoldersLoading] = useState(false);
-  const [connectionInvalidated, setConnectionInvalidated] = useState(false);
+  const [col1, setCol1] = useState<FolderEntry[]>([]);
+  const [col2, setCol2] = useState<FolderEntry[]>([]);
+  const [col3, setCol3] = useState<FolderEntry[]>([]);
+  const [selectedPathCol1, setSelectedPathCol1] = useState<string | null>(null);
+  const [selectedPathCol2, setSelectedPathCol2] = useState<string | null>(null);
+  const [loadingCol1, setLoadingCol1] = useState(false);
+  const [loadingCol2, setLoadingCol2] = useState(false);
+  const [loadingCol3, setLoadingCol3] = useState(false);
   const [togglingPath, setTogglingPath] = useState<string | null>(null);
   const [scanning, setScanning] = useState(false);
   const [disconnecting, setDisconnecting] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
-  const [foldersError, setFoldersError] = useState<string | null>(null);
+  const [connectionInvalidated, setConnectionInvalidated] = useState(false);
 
   const justConnected = searchParams.get("dropbox") === "connected";
   const showConnectedUI = (dropboxConnected || justConnected) && !connectionInvalidated;
 
   useEffect(() => {
     setSources(initialSources);
-    const stored = loadSelectedPathsFromStorage();
-    if (stored.length && !initialSources.length) {
-      saveSelectedPathsToStorage([]);
-    } else if (initialSources.length) {
-      saveSelectedPathsToStorage(initialSources.map((s) => normPath(s.path)));
-    }
   }, [initialSources]);
 
   useEffect(() => {
     if (justConnected) router.refresh();
   }, [justConnected, router]);
 
-  useEffect(() => {
-    if (!dropboxConnected && !justConnected) return;
-    setFoldersLoading(true);
+  const loadRootFolders = useCallback(() => {
+    if (!showConnectedUI) return;
+    setLoadingCol1(true);
     setMessage(null);
-    setFoldersError(null);
-    setConnectionInvalidated(false);
     fetchApi("/api/dropbox/root-folders")
       .then((res) => {
-        if (!res.ok) {
-          return res.json().then((d) => {
-            const msg = d.error ?? res.statusText;
-            if (res.status === 401 || String(msg).toLowerCase().includes("not connected")) {
-              setConnectionInvalidated(true);
-              setMessage("Dropbox no está conectado. Conectá tu cuenta para listar y elegir carpetas.");
-            }
-            setFoldersError(msg);
-            return Promise.reject(new Error(msg));
-          });
-        }
+        if (!res.ok) return res.json().then((d) => Promise.reject(new Error(d.error ?? res.statusText)));
         return res.json();
       })
-      .then((data: { folders?: RootFolder[] } | RootFolder[]) => {
+      .then((data: { folders?: FolderEntry[] } | FolderEntry[]) => {
         const list = Array.isArray(data) ? data : (data?.folders ?? []);
-        const sorted = (Array.isArray(list) ? list : []).slice().sort((a, b) =>
-          (a.name || a.path).localeCompare(b.name || b.path, undefined, { sensitivity: "base" })
-        );
-        setRootFolders(sorted);
-        setFoldersError(null);
+        const sorted = (Array.isArray(list) ? list : [])
+          .slice()
+          .sort((a, b) => (a.name || a.path).localeCompare(b.name || b.path, undefined, { sensitivity: "base" }));
+        setCol1(sorted);
+        setCol2([]);
+        setCol3([]);
+        setSelectedPathCol1(null);
+        setSelectedPathCol2(null);
       })
-      .catch((err) => {
-        setFoldersError(err instanceof Error ? err.message : "Error al cargar carpetas");
+      .catch((err) => setMessage(err instanceof Error ? err.message : "Error al cargar carpetas"))
+      .finally(() => setLoadingCol1(false));
+  }, [showConnectedUI]);
+
+  useEffect(() => {
+    if (!showConnectedUI) return;
+    loadRootFolders();
+  }, [showConnectedUI, loadRootFolders]);
+
+  const loadChildren = useCallback((path: string, setLoading: (v: boolean) => void, setEntries: (e: FolderEntry[]) => void) => {
+    setLoading(true);
+    const encoded = encodeURIComponent(path);
+    fetchApi(`/api/dropbox/folder-children?path=${encoded}`)
+      .then((res) => {
+        if (!res.ok) return res.json().then((d) => Promise.reject(new Error(d.error ?? res.statusText)));
+        return res.json();
       })
-      .finally(() => setFoldersLoading(false));
-  }, [dropboxConnected, justConnected]);
+      .then((data: { folders?: FolderEntry[] } | FolderEntry[]) => {
+        const list = Array.isArray(data) ? data : (data?.folders ?? []);
+        const sorted = (Array.isArray(list) ? list : [])
+          .slice()
+          .sort((a, b) => (a.name || a.path).localeCompare(b.name || b.path, undefined, { sensitivity: "base" }));
+        setEntries(sorted);
+      })
+      .catch(() => setEntries([]))
+      .finally(() => setLoading(false));
+  }, []);
+
+  useEffect(() => {
+    if (selectedPathCol1 == null) {
+      setCol2([]);
+      setCol3([]);
+      setSelectedPathCol2(null);
+      return;
+    }
+    loadChildren(selectedPathCol1, setLoadingCol2, setCol2);
+    setCol3([]);
+    setSelectedPathCol2(null);
+  }, [selectedPathCol1, loadChildren]);
+
+  useEffect(() => {
+    if (selectedPathCol2 == null) {
+      setCol3([]);
+      return;
+    }
+    loadChildren(selectedPathCol2, setLoadingCol3, setCol3);
+  }, [selectedPathCol2, loadChildren]);
 
   function isSelected(path: string): boolean {
     const n = normPath(path);
@@ -118,13 +129,13 @@ export default function SettingsClient({
     return sources.find((s) => normPath(s.path) === n)?.id;
   }
 
-  async function toggleFolder(folder: RootFolder) {
-    const path = normPath(folder.path);
-    setTogglingPath(path);
+  async function toggleFolder(path: string) {
+    const n = normPath(path);
+    setTogglingPath(n);
     setMessage(null);
     try {
-      if (isSelected(path)) {
-        const id = getSourceId(path);
+      if (isSelected(n)) {
+        const id = getSourceId(n);
         if (!id) return;
         const res = await fetchApi(`/api/dropbox/sources?id=${encodeURIComponent(id)}`, { method: "DELETE" });
         if (!res.ok) {
@@ -132,31 +143,52 @@ export default function SettingsClient({
           setMessage(data.error ?? "Error al quitar carpeta");
           return;
         }
-        setSources((prev) => {
-          const next = prev.filter((s) => s.id !== id);
-          saveSelectedPathsToStorage(next.map((s) => normPath(s.path)));
-          return next;
-        });
+        setSources((prev) => prev.filter((s) => s.id !== id));
       } else {
         const res = await fetchApi("/api/dropbox/sources", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ path }),
+          body: JSON.stringify({ path: n }),
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) {
           setMessage(data.error ?? "Error al añadir carpeta");
           return;
         }
-        setSources((prev) => {
-          const next = [...prev, { id: data.id, path: data.path ?? path }];
-          saveSelectedPathsToStorage(next.map((s) => normPath(s.path)));
-          return next;
-        });
+        setSources((prev) => [...prev, { id: data.id, path: data.path ?? n }]);
       }
     } finally {
       setTogglingPath(null);
     }
+  }
+
+  async function selectAllRoots() {
+    if (!col1.length) return;
+    setMessage(null);
+    const toAdd = col1.filter((f) => !isSelected(normPath(f.path)));
+    for (const f of toAdd) {
+      const n = normPath(f.path);
+      const res = await fetchApi("/api/dropbox/sources", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: n }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.id) {
+        setSources((prev) => [...prev, { id: data.id, path: data.path ?? n }]);
+      }
+    }
+    if (toAdd.length > 0) setMessage(`${toAdd.length} carpeta(s) añadida(s).`);
+  }
+
+  async function deselectAll() {
+    if (sources.length === 0) return;
+    setMessage(null);
+    for (const s of sources) {
+      await fetchApi(`/api/dropbox/sources?id=${encodeURIComponent(s.id)}`, { method: "DELETE" });
+    }
+    setSources([]);
+    setMessage("Todas las carpetas deseleccionadas.");
   }
 
   async function connectDropbox() {
@@ -220,6 +252,60 @@ export default function SettingsClient({
     }
   }, []);
 
+  function renderColumn(
+    title: string,
+    entries: FolderEntry[],
+    loading: boolean,
+    selectedPath: string | null,
+    onSelect: (path: string) => void
+  ) {
+    return (
+      <div className="flex flex-col rounded-lg border border-zinc-800 bg-zinc-800/30 min-w-0 flex-1">
+        <div className="px-3 py-2 border-b border-zinc-700 text-xs font-medium text-zinc-400">{title}</div>
+        <div className="overflow-auto min-h-[200px] max-h-[320px]">
+          {loading ? (
+            <div className="p-4 text-center text-zinc-500 text-sm">Cargando…</div>
+          ) : entries.length === 0 ? (
+            <div className="p-4 text-center text-zinc-500 text-sm">
+              {selectedPath == null && title !== "Raíz" ? "Elegí una carpeta a la izquierda" : "Sin carpetas"}
+            </div>
+          ) : (
+            <ul className="divide-y divide-zinc-800">
+              {entries.map((folder) => {
+                const pathNorm = normPath(folder.path);
+                const selected = isSelected(pathNorm);
+                const busy = togglingPath === pathNorm;
+                const isRowSelected = selectedPath === pathNorm;
+                return (
+                  <li
+                    key={folder.path}
+                    className={`flex items-center gap-2 px-3 py-2 hover:bg-zinc-700/50 transition-colors cursor-pointer ${
+                      isRowSelected ? "bg-zinc-700/70" : ""
+                    }`}
+                    onClick={() => onSelect(pathNorm)}
+                  >
+                    <label className="flex items-center gap-2 flex-1 min-w-0 cursor-pointer" onClick={(e) => e.stopPropagation()}>
+                      <input
+                        type="checkbox"
+                        checked={selected}
+                        disabled={busy}
+                        onChange={() => toggleFolder(pathNorm)}
+                        className="rounded border-zinc-600 bg-zinc-800 text-blue-600 focus:ring-blue-500 w-4 h-4 shrink-0"
+                      />
+                      <span className="text-sm text-white truncate" title={folder.path}>
+                        {folder.name || folder.path || "/"}
+                      </span>
+                    </label>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       {!showConnectedUI && (
@@ -246,57 +332,46 @@ export default function SettingsClient({
               Si ves &quot;missing_scope&quot;, desconectá y conectá de nuevo (y activá files.metadata.read en la app de Dropbox).
             </span>
           </div>
+
           <div>
             <h3 className="text-sm font-medium text-zinc-300 mb-3">Carpetas a escanear</h3>
-            <p className="text-xs text-zinc-500 mb-4">
-              Marcá las carpetas de la raíz de tu Dropbox que querés incluir en el scan.
+            <p className="text-xs text-zinc-500 mb-3">
+              Explorá la raíz y subcarpetas. Marcá las que querés incluir en el scan. Podés seleccionar o deseleccionar en bloque.
             </p>
-            {foldersLoading ? (
-              <div className="rounded-lg border border-zinc-800 bg-zinc-800/30 p-6 text-center text-zinc-400 text-sm">
-                Cargando carpetas…
-              </div>
-            ) : foldersError ? (
-              <div className="rounded-lg border border-zinc-800 bg-zinc-800/30 p-6 text-center text-red-300 text-sm">
-                {foldersError}
-              </div>
-            ) : rootFolders.length === 0 ? (
-              <div className="rounded-lg border border-zinc-800 bg-zinc-800/30 p-6 text-center text-zinc-500 text-sm">
-                No se encontraron carpetas en la raíz de Dropbox.
-              </div>
-            ) : (
-              <ul className="rounded-lg border border-zinc-800 divide-y divide-zinc-800 overflow-hidden">
-                {rootFolders.map((folder) => {
-                  const path = normPath(folder.path);
-                  const selected = isSelected(path);
-                  const busy = togglingPath === path;
-                  return (
-                    <li
-                      key={folder.path}
-                      className="flex items-center gap-3 px-4 py-3 hover:bg-zinc-800/50 transition-colors"
-                    >
-                      <label className="flex items-center gap-3 cursor-pointer flex-1 min-w-0">
-                        <input
-                          type="checkbox"
-                          checked={selected}
-                          disabled={busy}
-                          onChange={() => toggleFolder(folder)}
-                          className="rounded border-zinc-600 bg-zinc-800 text-blue-600 focus:ring-blue-500 focus:ring-offset-zinc-900 w-4 h-4"
-                        />
-                        <span className="text-white font-medium truncate" title={folder.path}>
-                          {folder.name || folder.path || "/"}
-                        </span>
-                        <span className="text-zinc-500 text-sm truncate shrink-0" title={folder.path}>
-                          {folder.path}
-                        </span>
-                      </label>
-                      {busy && (
-                        <span className="text-xs text-zinc-500 shrink-0">Guardando…</span>
-                      )}
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
+            <div className="flex gap-2 mb-3">
+              <button
+                type="button"
+                onClick={selectAllRoots}
+                disabled={loadingCol1 || col1.length === 0}
+                className="px-3 py-1.5 rounded border border-zinc-600 text-zinc-300 text-sm hover:bg-zinc-800 disabled:opacity-50"
+              >
+                Seleccionar todo (raíz)
+              </button>
+              <button
+                type="button"
+                onClick={deselectAll}
+                disabled={sources.length === 0}
+                className="px-3 py-1.5 rounded border border-zinc-600 text-zinc-300 text-sm hover:bg-zinc-800 disabled:opacity-50"
+              >
+                Deseleccionar todo
+              </button>
+              <button
+                type="button"
+                onClick={loadRootFolders}
+                disabled={loadingCol1}
+                className="px-3 py-1.5 rounded border border-zinc-600 text-zinc-300 text-sm hover:bg-zinc-800 disabled:opacity-50"
+              >
+                Actualizar lista
+              </button>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              {renderColumn("Raíz", col1, loadingCol1, selectedPathCol1, setSelectedPathCol1)}
+              {renderColumn("Subcarpetas", col2, loadingCol2, selectedPathCol2, setSelectedPathCol2)}
+              {renderColumn("Subcarpetas", col3, loadingCol3, null, () => {})}
+            </div>
+            <p className="text-xs text-zinc-500 mt-2">
+              {sources.length} carpeta(s) seleccionada(s) para el scan.
+            </p>
           </div>
 
           <div className="pt-2">
