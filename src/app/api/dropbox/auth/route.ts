@@ -24,6 +24,7 @@ export async function GET(request: Request) {
     state,
     token_access_type: "offline",
     scope: "files.metadata.read files.content.read",
+    force_reapprove: "true",
   });
 
   const url = `${DROPBOX_OAUTH}?${params.toString()}`;
