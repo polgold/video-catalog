@@ -9,7 +9,7 @@ function isVideo(path: string): boolean {
   return VIDEO_EXT.some((ext) => lower.endsWith(ext));
 }
 
-type ScanBody = { folders?: string[]; sourceIds?: string[] };
+type ScanBody = { folders?: string[]; sourceIds?: string[]; stream?: boolean };
 
 export async function POST(request: Request) {
   const supabase = createSupabaseServer();
