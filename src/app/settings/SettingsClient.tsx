@@ -36,6 +36,7 @@ export default function SettingsClient({
   const [loadingCol3, setLoadingCol3] = useState(false);
   const [togglingPath, setTogglingPath] = useState<string | null>(null);
   const [scanning, setScanning] = useState(false);
+  const [scanProgress, setScanProgress] = useState<{ folder: string; index: number; total: number; added: number; totalAdded: number } | null>(null);
   const [disconnecting, setDisconnecting] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [connectionInvalidated, setConnectionInvalidated] = useState(false);
@@ -214,28 +215,78 @@ export default function SettingsClient({
   }
 
   async function runScan() {
-    const selectedPaths = sources.map((s) => normPath(s.path));
-    if (!selectedPaths.length) {
+    if (!sources.length) {
       setMessage("Seleccioná al menos una carpeta para ejecutar el scan.");
       return;
     }
     setScanning(true);
+    setScanProgress(null);
     setMessage(null);
     try {
       const res = await fetchApi("/api/dropbox/scan", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ folders: selectedPaths }),
+        body: JSON.stringify({ sourceIds: sources.map((s) => s.id), stream: true }),
       });
-      const data = await res.json().catch(() => ({}));
       if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
         const hint = (data as { hint?: string }).hint;
         setMessage(hint ? `${data.error ?? "Error al escanear"}. ${hint}` : (data.error ?? "Error al escanear"));
         return;
       }
-      setMessage(`Scan completado. ${data.added ?? 0} videos nuevos añadidos a la cola.`);
+      if (res.body == null) {
+        setMessage("Error al escanear: respuesta sin cuerpo");
+        return;
+      }
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n\n");
+        buffer = lines.pop() ?? "";
+        for (const line of lines) {
+          const dataStr = line.replace(/^data: /, "").trim();
+          if (!dataStr) continue;
+          try {
+            const data = JSON.parse(dataStr) as { type?: string; error?: string; folder?: string; index?: number; total?: number; added?: number; totalAdded?: number };
+            if (data.type === "progress" && data.folder != null && data.index != null && data.total != null) {
+              setScanProgress({
+                folder: data.folder,
+                index: data.index,
+                total: data.total,
+                added: data.added ?? 0,
+                totalAdded: data.totalAdded ?? 0,
+              });
+            } else if (data.type === "done") {
+              setScanProgress(null);
+              setMessage(`Scan completado. ${data.totalAdded ?? 0} videos nuevos añadidos a la cola.`);
+            } else if (data.type === "error" && data.error) {
+              setScanProgress(null);
+              setMessage(`Error al escanear: ${data.error}`);
+            }
+          } catch {
+            // ignore parse errors
+          }
+        }
+      }
+      if (buffer.trim()) {
+        try {
+          const data = JSON.parse(buffer.replace(/^data: /, "").trim()) as { type?: string; error?: string; totalAdded?: number };
+          if (data.type === "done") setMessage(`Scan completado. ${data.totalAdded ?? 0} videos nuevos añadidos a la cola.`);
+          else if (data.type === "error" && data.error) setMessage(`Error al escanear: ${data.error}`);
+        } catch {
+          // ignore
+        }
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setMessage(`Error de red o timeout. El scan puede tardar mucho en carpetas grandes. Detalle: ${msg}`);
     } finally {
       setScanning(false);
+      setScanProgress(null);
     }
   }
 
@@ -382,6 +433,16 @@ export default function SettingsClient({
             >
               {scanning ? "Escaneando…" : "Ejecutar scan incremental"}
             </button>
+            {scanProgress && (
+              <p className="text-sm text-emerald-300/90 mt-2">
+                Carpeta {scanProgress.index} de {scanProgress.total}: {scanProgress.folder} — {scanProgress.totalAdded} videos añadidos hasta ahora.
+              </p>
+            )}
+            {scanning && !scanProgress && (
+              <p className="text-xs text-zinc-400 mt-2">
+                Conectando con Dropbox… (puede tardar varios minutos en carpetas grandes)
+              </p>
+            )}
             {sources.length === 0 && (
               <p className="text-xs text-amber-400/90 mt-2">
                 Seleccioná al menos una carpeta para ejecutar el scan.
