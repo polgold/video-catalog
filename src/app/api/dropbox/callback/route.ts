@@ -59,18 +59,42 @@ export async function GET(request: Request) {
   const data = (await res.json()) as { access_token: string; refresh_token?: string };
   const supabase = createSupabaseServer();
 
-  const { data: existing } = await supabase.from("dropbox_credentials").select("id").limit(1).single();
+  const { data: existing, error: selectError } = await supabase
+    .from("dropbox_credentials")
+    .select("id")
+    .limit(1)
+    .maybeSingle();
+
+  if (selectError) {
+    return NextResponse.redirect(
+      `${baseUrl}/settings?dropbox=save_error&message=${encodeURIComponent(selectError.message)}`
+    );
+  }
+
   if (existing) {
-    await supabase.from("dropbox_credentials").update({
-      access_token: data.access_token,
-      refresh_token: data.refresh_token ?? null,
-      updated_at: new Date().toISOString(),
-    }).eq("id", existing.id);
+    const { error: updateError } = await supabase
+      .from("dropbox_credentials")
+      .update({
+        access_token: data.access_token,
+        refresh_token: data.refresh_token ?? null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", existing.id);
+    if (updateError) {
+      return NextResponse.redirect(
+        `${baseUrl}/settings?dropbox=save_error&message=${encodeURIComponent(updateError.message)}`
+      );
+    }
   } else {
-    await supabase.from("dropbox_credentials").insert({
+    const { error: insertError } = await supabase.from("dropbox_credentials").insert({
       access_token: data.access_token,
       refresh_token: data.refresh_token ?? null,
     });
+    if (insertError) {
+      return NextResponse.redirect(
+        `${baseUrl}/settings?dropbox=save_error&message=${encodeURIComponent(insertError.message)}`
+      );
+    }
   }
 
   return NextResponse.redirect(`${baseUrl}/settings?dropbox=connected`);

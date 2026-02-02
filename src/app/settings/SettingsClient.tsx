@@ -23,12 +23,13 @@ export default function SettingsClient({
   const [sources, setSources] = useState<Source[]>(initialSources);
   const [rootFolders, setRootFolders] = useState<RootFolder[]>([]);
   const [foldersLoading, setFoldersLoading] = useState(false);
+  const [connectionInvalidated, setConnectionInvalidated] = useState(false);
   const [togglingPath, setTogglingPath] = useState<string | null>(null);
   const [scanning, setScanning] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
   const justConnected = searchParams.get("dropbox") === "connected";
-  const showConnectedUI = dropboxConnected || justConnected;
+  const showConnectedUI = (dropboxConnected || justConnected) && !connectionInvalidated;
 
   useEffect(() => {
     setSources(initialSources);
@@ -39,18 +40,28 @@ export default function SettingsClient({
   }, [justConnected, router]);
 
   useEffect(() => {
-    if (!showConnectedUI) return;
+    if (!dropboxConnected && !justConnected) return;
     setFoldersLoading(true);
     setMessage(null);
+    setConnectionInvalidated(false);
     fetch("/api/dropbox/root-folders")
       .then((res) => {
-        if (!res.ok) return res.json().then((d) => Promise.reject(new Error(d.error ?? res.statusText)));
+        if (!res.ok) {
+          return res.json().then((d) => {
+            const msg = d.error ?? res.statusText;
+            if (res.status === 401 || String(msg).toLowerCase().includes("not connected")) {
+              setConnectionInvalidated(true);
+              setMessage("Dropbox no está conectado. Conectá tu cuenta para listar y elegir carpetas.");
+            }
+            return Promise.reject(new Error(msg));
+          });
+        }
         return res.json();
       })
       .then((data: RootFolder[]) => setRootFolders(Array.isArray(data) ? data : []))
       .catch((err) => setMessage(err instanceof Error ? err.message : "Error al cargar carpetas"))
       .finally(() => setFoldersLoading(false));
-  }, [showConnectedUI]);
+  }, [dropboxConnected, justConnected]);
 
   function isSelected(path: string): boolean {
     const n = normPath(path);
@@ -122,6 +133,10 @@ export default function SettingsClient({
     if (dropbox === "connected") setMessage("Dropbox conectado correctamente.");
     if (dropbox === "error" && msg) setMessage(`Error Dropbox: ${decodeURIComponent(msg)}`);
     if (dropbox === "config_error") setMessage("Faltan DROPBOX_APP_KEY o DROPBOX_APP_SECRET en .env.");
+    if (dropbox === "save_error" && msg) {
+      setMessage(`No se pudo guardar la conexión en la base de datos: ${decodeURIComponent(msg)}. Revisá SUPABASE_SERVICE_ROLE_KEY y NEXT_PUBLIC_SUPABASE_URL en Netlify.`);
+      setConnectionInvalidated(true);
+    }
   }, []);
 
   return (
