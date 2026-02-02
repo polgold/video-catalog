@@ -62,8 +62,8 @@ export default function SettingsClient({
         if (!res.ok) return res.json().then((d) => Promise.reject(new Error(d.error ?? res.statusText)));
         return res.json();
       })
-      .then((data: { folders?: FolderEntry[] } | FolderEntry[]) => {
-        const list = Array.isArray(data) ? data : (data?.folders ?? []);
+      .then((data: { folders?: FolderEntry[] }) => {
+        const list = data?.folders ?? [];
         const sorted = (Array.isArray(list) ? list : [])
           .slice()
           .sort((a, b) => (a.name || a.path_lower).localeCompare(b.name || b.path_lower, undefined, { sensitivity: "base" }));
@@ -90,8 +90,8 @@ export default function SettingsClient({
         if (!res.ok) return res.json().then((d) => Promise.reject(new Error(d.error ?? res.statusText)));
         return res.json();
       })
-      .then((data: { folders?: FolderEntry[] } | FolderEntry[]) => {
-        const list = Array.isArray(data) ? data : (data?.folders ?? []);
+      .then((data: { folders?: FolderEntry[] }) => {
+        const list = data?.folders ?? [];
         const sorted = (Array.isArray(list) ? list : [])
           .slice()
           .sort((a, b) => (a.name || a.path_lower).localeCompare(b.name || b.path_lower, undefined, { sensitivity: "base" }));
@@ -244,7 +244,9 @@ export default function SettingsClient({
         return;
       }
       setScanJobId(jobId);
-      setMessage(`Scan iniciado (job ${jobId.slice(0, 8)}…). El worker procesará en background.`);
+      setMessage(
+        `Scan iniciado (job ${jobId.slice(0, 8)}…). Para que avance, tenés que tener el worker corriendo en tu máquina: node worker/index.mjs`
+      );
       const pollStatus = async () => {
         const statusRes = await fetchApi(`/api/jobs/${jobId}`);
         const job = await statusRes.json().catch(() => ({}));
@@ -436,6 +438,11 @@ export default function SettingsClient({
                 Estado: {scanJobStatus.status}
                 {scanJobStatus.error && ` — Error: ${scanJobStatus.error}`}
                 {scanJobStatus.result?.added != null && scanJobStatus.status === "done" && ` — ${scanJobStatus.result.added} videos añadidos`}
+                {scanJobStatus.status === "pending" && (
+                  <span className="block text-amber-300/90 text-xs mt-1">
+                    Si no cambia: ejecutá el worker en tu máquina: <code className="bg-zinc-800 px-1 rounded">node worker/index.mjs</code>
+                  </span>
+                )}
               </p>
             )}
             {scanning && !scanJobStatus && (

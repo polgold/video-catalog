@@ -5,8 +5,9 @@
  * download from Dropbox -> tmp, ffmpeg (metadata, audio, keyframes),
  * Whisper transcript, LLM (summary, title, description, genre, styles, tags),
  * duplicate detection (sha256, phash, audio fp), save to DB + Supabase Storage.
- * Requires: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, DROPBOX_ACCESS_TOKEN (or from DB),
- * OPENAI_API_KEY, ffmpeg on PATH.
+ * Requires: NEXT_PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY (o NEXT_PUBLIC_SUPABASE_ANON_KEY),
+ * OPENAI_API_KEY (para process), ffmpeg on PATH.
+ * Al ejecutar con npm run worker desde la raíz, se carga .env.local vía node --env-file=../.env.local
  */
 
 import { createClient } from "@supabase/supabase-js";
