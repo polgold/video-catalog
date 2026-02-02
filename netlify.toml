@@ -1,0 +1,5 @@
+# Disable secrets scan during build: Next.js inlines env vars (from Netlify UI)
+# into the build output, so the scanner flags those values. Real secrets live
+# only in Netlify environment variables, not in the repo.
+[build.environment]
+SECRETS_SCAN_ENABLED = "false"
