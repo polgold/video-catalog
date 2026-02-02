@@ -4,6 +4,12 @@ import { useState, useEffect } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 
 type Source = { id: string; path: string };
+type RootFolder = { path: string; name: string };
+
+function normPath(p: string): string {
+  const s = (p ?? "").trim();
+  return s.startsWith("/") ? s : `/${s}`;
+}
 
 export default function SettingsClient({
   dropboxConnected,
@@ -15,8 +21,9 @@ export default function SettingsClient({
   const router = useRouter();
   const searchParams = useSearchParams();
   const [sources, setSources] = useState<Source[]>(initialSources);
-  const [newPath, setNewPath] = useState("");
-  const [adding, setAdding] = useState(false);
+  const [rootFolders, setRootFolders] = useState<RootFolder[]>([]);
+  const [foldersLoading, setFoldersLoading] = useState(false);
+  const [togglingPath, setTogglingPath] = useState<string | null>(null);
   const [scanning, setScanning] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
@@ -31,38 +38,65 @@ export default function SettingsClient({
     if (justConnected) router.refresh();
   }, [justConnected, router]);
 
-  async function connectDropbox() {
-    window.location.href = "/api/dropbox/auth";
+  useEffect(() => {
+    if (!showConnectedUI) return;
+    setFoldersLoading(true);
+    setMessage(null);
+    fetch("/api/dropbox/root-folders")
+      .then((res) => {
+        if (!res.ok) return res.json().then((d) => Promise.reject(new Error(d.error ?? res.statusText)));
+        return res.json();
+      })
+      .then((data: RootFolder[]) => setRootFolders(Array.isArray(data) ? data : []))
+      .catch((err) => setMessage(err instanceof Error ? err.message : "Error al cargar carpetas"))
+      .finally(() => setFoldersLoading(false));
+  }, [showConnectedUI]);
+
+  function isSelected(path: string): boolean {
+    const n = normPath(path);
+    return sources.some((s) => normPath(s.path) === n);
   }
 
-  async function addFolder() {
-    if (!newPath.trim()) return;
-    setAdding(true);
+  function getSourceId(path: string): string | undefined {
+    const n = normPath(path);
+    return sources.find((s) => normPath(s.path) === n)?.id;
+  }
+
+  async function toggleFolder(folder: RootFolder) {
+    const path = normPath(folder.path);
+    setTogglingPath(path);
     setMessage(null);
     try {
-      const res = await fetch("/api/dropbox/sources", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ path: newPath.trim().startsWith("/") ? newPath.trim() : `/${newPath.trim()}` }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        setMessage(data.error || res.statusText);
-        return;
+      if (isSelected(path)) {
+        const id = getSourceId(path);
+        if (!id) return;
+        const res = await fetch(`/api/dropbox/sources?id=${encodeURIComponent(id)}`, { method: "DELETE" });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          setMessage(data.error ?? "Error al quitar carpeta");
+          return;
+        }
+        setSources((prev) => prev.filter((s) => s.id !== id));
+      } else {
+        const res = await fetch("/api/dropbox/sources", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ path }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          setMessage(data.error ?? "Error al añadir carpeta");
+          return;
+        }
+        setSources((prev) => [...prev, { id: data.id, path: data.path ?? path }]);
       }
-      setSources((prev) => [...prev, { id: data.id, path: data.path }]);
-      setNewPath("");
-      setMessage("Carpeta añadida.");
     } finally {
-      setAdding(false);
+      setTogglingPath(null);
     }
   }
 
-  async function removeFolder(id: string) {
-    const res = await fetch(`/api/dropbox/sources?id=${encodeURIComponent(id)}`, { method: "DELETE" });
-    if (!res.ok) return;
-    setSources((prev) => prev.filter((s) => s.id !== id));
-    setMessage("Carpeta eliminada.");
+  async function connectDropbox() {
+    window.location.href = "/api/dropbox/auth";
   }
 
   async function runScan() {
@@ -72,7 +106,7 @@ export default function SettingsClient({
       const res = await fetch("/api/dropbox/scan", { method: "POST" });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        setMessage(data.error || "Error al escanear");
+        setMessage(data.error ?? "Error al escanear");
         return;
       }
       setMessage(`Scan completado. ${data.added ?? 0} videos nuevos añadidos a la cola.`);
@@ -95,7 +129,7 @@ export default function SettingsClient({
       {!showConnectedUI && (
         <button
           onClick={connectDropbox}
-          className="px-4 py-2 rounded bg-blue-600 text-white font-medium hover:bg-blue-500"
+          className="px-4 py-2 rounded-lg bg-blue-600 text-white font-medium hover:bg-blue-500 transition-colors"
         >
           Conectar Dropbox
         </button>
@@ -104,63 +138,78 @@ export default function SettingsClient({
       {showConnectedUI && (
         <>
           <div>
-            <label className="block text-sm text-zinc-400 mb-2">Carpetas a escanear (ruta en Dropbox, ej. /Videos)</label>
-            <div className="flex gap-2">
-              <input
-                type="text"
-                value={newPath}
-                onChange={(e) => setNewPath(e.target.value)}
-                placeholder="/Mi Carpeta"
-                className="flex-1 bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-white"
-              />
-              <button
-                onClick={addFolder}
-                disabled={adding}
-                className="px-4 py-2 rounded bg-zinc-700 text-white hover:bg-zinc-600 disabled:opacity-50"
-              >
-                {adding ? "Añadiendo…" : "Añadir"}
-              </button>
-            </div>
-          </div>
-
-          <div>
-            <h3 className="text-sm font-medium text-zinc-400 mb-2">Carpetas incluidas</h3>
-            <ul className="rounded border border-zinc-800 divide-y divide-zinc-800">
-              {sources.length === 0 ? (
-                <li className="px-4 py-3 text-zinc-500 text-sm">Ninguna. Añade una ruta arriba.</li>
-              ) : (
-                sources.map((s) => (
-                  <li key={s.id} className="flex items-center justify-between px-4 py-3">
-                    <span className="text-white font-mono text-sm">{s.path}</span>
-                    <button
-                      onClick={() => removeFolder(s.id)}
-                      className="text-red-400 hover:underline text-sm"
+            <h3 className="text-sm font-medium text-zinc-300 mb-3">Carpetas a escanear</h3>
+            <p className="text-xs text-zinc-500 mb-4">
+              Marcá las carpetas de la raíz de tu Dropbox que querés incluir en el scan.
+            </p>
+            {foldersLoading ? (
+              <div className="rounded-lg border border-zinc-800 bg-zinc-800/30 p-6 text-center text-zinc-400 text-sm">
+                Cargando carpetas…
+              </div>
+            ) : rootFolders.length === 0 && !foldersLoading ? (
+              <div className="rounded-lg border border-zinc-800 bg-zinc-800/30 p-6 text-center text-zinc-500 text-sm">
+                No se encontraron carpetas en la raíz o no se pudo conectar a Dropbox.
+              </div>
+            ) : (
+              <ul className="rounded-lg border border-zinc-800 divide-y divide-zinc-800 overflow-hidden">
+                {rootFolders.map((folder) => {
+                  const path = normPath(folder.path);
+                  const selected = isSelected(path);
+                  const busy = togglingPath === path;
+                  return (
+                    <li
+                      key={folder.path}
+                      className="flex items-center gap-3 px-4 py-3 hover:bg-zinc-800/50 transition-colors"
                     >
-                      Quitar
-                    </button>
-                  </li>
-                ))
-              )}
-            </ul>
+                      <label className="flex items-center gap-3 cursor-pointer flex-1 min-w-0">
+                        <input
+                          type="checkbox"
+                          checked={selected}
+                          disabled={busy}
+                          onChange={() => toggleFolder(folder)}
+                          className="rounded border-zinc-600 bg-zinc-800 text-blue-600 focus:ring-blue-500 focus:ring-offset-zinc-900 w-4 h-4"
+                        />
+                        <span className="text-white font-medium truncate" title={folder.path}>
+                          {folder.name || folder.path || "/"}
+                        </span>
+                        <span className="text-zinc-500 text-sm truncate shrink-0" title={folder.path}>
+                          {folder.path}
+                        </span>
+                      </label>
+                      {busy && (
+                        <span className="text-xs text-zinc-500 shrink-0">Guardando…</span>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
           </div>
 
-          <div>
+          <div className="pt-2">
             <button
               onClick={runScan}
               disabled={scanning || sources.length === 0}
-              className="px-4 py-2 rounded bg-green-700 text-white font-medium hover:bg-green-600 disabled:opacity-50"
+              className="px-4 py-2 rounded-lg bg-emerald-600 text-white font-medium hover:bg-emerald-500 disabled:opacity-50 disabled:pointer-events-none transition-colors"
             >
               {scanning ? "Escaneando…" : "Ejecutar scan incremental"}
             </button>
             <p className="text-xs text-zinc-500 mt-2">
-              Detecta archivos nuevos o modificados en las carpetas y crea jobs de ingest. El worker procesará cada video (metadata, keyframes, transcripción, LLM, duplicados).
+              Detecta archivos nuevos o modificados en las carpetas seleccionadas y crea jobs de ingest. El worker
+              procesará cada video (metadata, keyframes, transcripción, LLM, duplicados).
             </p>
           </div>
         </>
       )}
 
       {message && (
-        <p className="text-sm text-zinc-400 p-3 rounded bg-zinc-800 border border-zinc-700">
+        <p
+          className={`text-sm p-3 rounded-lg border ${
+            message.startsWith("Error") || message.includes("error")
+              ? "bg-red-900/20 border-red-800 text-red-200"
+              : "bg-zinc-800/50 border-zinc-700 text-zinc-300"
+          }`}
+        >
           {message}
         </p>
       )}
