@@ -335,7 +335,12 @@ export default function SettingsClient({
                     }`}
                     onClick={() => onSelect(pathNorm)}
                   >
-                    <label className="flex items-center gap-2 flex-1 min-w-0 cursor-pointer" onClick={(e) => e.stopPropagation()}>
+                    <label
+                      className="flex items-center gap-2 flex-1 min-w-0 cursor-pointer"
+                      onClick={(e) => {
+                        if ((e.target as HTMLElement).tagName === "INPUT") e.stopPropagation();
+                      }}
+                    >
                       <input
                         type="checkbox"
                         checked={selected}
@@ -387,7 +392,10 @@ export default function SettingsClient({
           <div>
             <h3 className="text-sm font-medium text-zinc-300 mb-3">Carpetas a escanear</h3>
             <p className="text-xs text-zinc-500 mb-3">
-              Explorá la raíz y subcarpetas. Marcá las que querés incluir en el scan. Podés seleccionar o deseleccionar en bloque.
+              Explorá la raíz y subcarpetas. <strong>Hacé clic en el nombre de la carpeta</strong> (no en la casilla) para ver subcarpetas en la columna siguiente. Marcá las casillas para incluir carpetas en el scan.
+            </p>
+            <p className="text-xs text-amber-400/90 mb-3">
+              En deploy (Netlify) el scan puede hacer timeout en carpetas muy grandes; para muchas carpetas ejecutá el scan en local (<code className="bg-zinc-800 px-1 rounded">npm run dev</code>).
             </p>
             <div className="flex gap-2 mb-3">
               <button
@@ -450,7 +458,7 @@ export default function SettingsClient({
             )}
             <p className="text-xs text-zinc-500 mt-2">
               Detecta archivos nuevos o modificados en las carpetas seleccionadas y crea jobs de ingest. El worker
-              procesará cada video (metadata, keyframes, transcripción, LLM, duplicados).
+              procesará cada video (metadata, keyframes, transcripción, LLM, duplicados). El scan incluye todas las subcarpetas (recursivo).
             </p>
           </div>
         </>
