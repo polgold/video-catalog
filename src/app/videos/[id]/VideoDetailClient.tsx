@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import type { Video } from "@/lib/db/types";
 import type { Duplicate } from "@/lib/db/types";
 
