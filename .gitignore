@@ -17,8 +17,11 @@
 /.next/
 /out/
 
-# production
+# build output
 /build
+
+# Netlify
+.netlify/
 
 # misc
 .DS_Store
